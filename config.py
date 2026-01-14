@@ -48,8 +48,23 @@ class SupportConfig:
 
     # Support geometry
     SUPPORT_TIP_DIAMETER = 0.3  # mm - minimal contact point
-    SUPPORT_BASE_DIAMETER = 1.8  # mm - stable base
+    SUPPORT_BASE_DIAMETER = 1.0  # mm - maximum diameter (was 1.8mm)
+    SUPPORT_MAX_DIAMETER = 1.0  # mm - absolute maximum for any support element
     SUPPORT_TAPER_ANGLE = 7.0  # degrees
+
+    # Lattice tower configuration
+    LATTICE_TOWER_ENABLED = True  # Use lattice towers to consolidate support roots
+    LATTICE_STRUT_DIAMETER = 0.8  # mm - diameter of lattice bracing struts
+    LATTICE_MAIN_DIAMETER = 1.0  # mm - diameter of main lattice verticals
+    LATTICE_SPACING = 10.0  # mm - spacing between lattice tower centers
+    LATTICE_BRACE_ANGLE = 60.0  # degrees - angle of diagonal braces
+
+    # Collision avoidance and routing
+    COLLISION_CHECK_ENABLED = True  # Check for collisions with model
+    COLLISION_RESOLUTION = 0.5  # mm - resolution for collision checking
+    ROUTING_STEP_SIZE = 0.5  # mm - step size for pathfinding
+    MAX_ROUTING_ANGLE = 30.0  # degrees - maximum bend angle per segment
+    LATERAL_ROUTING_ENABLED = True  # Allow supports to route laterally
 
     # Detection thresholds
     MAX_BRIDGE_LENGTH = 5.0  # mm - conservative for partially cured resin
