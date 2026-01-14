@@ -13,7 +13,7 @@ from mesh_loader import MeshLoader
 from orientation import OrientationOptimizer
 from island_detector import IslandDetector
 from overhang_detector import OverhangDetector
-from support_generator import SupportGenerator
+from support_structures import SupportGenerator
 from config import (
     PrinterConfig, ResinConfig, SupportConfig, AnalysisConfig, get_config
 )
