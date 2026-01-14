@@ -54,14 +54,17 @@ class MeshLoader:
             else:
                 print("    Warning: Could not fully repair mesh, results may be suboptimal")
 
-        # Remove degenerate faces
-        self.mesh.remove_degenerate_faces()
+        # Remove degenerate faces (if method exists)
+        if hasattr(self.mesh, 'remove_degenerate_faces'):
+            self.mesh.remove_degenerate_faces()
 
         # Merge close vertices
-        self.mesh.merge_vertices()
+        if hasattr(self.mesh, 'merge_vertices'):
+            self.mesh.merge_vertices()
 
         # Ensure correct winding
-        self.mesh.fix_normals()
+        if hasattr(self.mesh, 'fix_normals'):
+            self.mesh.fix_normals()
 
         print(f"    Final mesh: {len(self.mesh.vertices)} vertices, {len(self.mesh.faces)} faces")
 
