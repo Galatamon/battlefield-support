@@ -110,50 +110,40 @@ class SupportGenerator:
 
         Args:
             x, y: Center position
-            z_base: Base Z height
+            z_base: Base Z height (build plate)
             height: Support height
-            tip_radius: Radius at tip (top)
-            base_radius: Radius at base (bottom)
+            tip_radius: Radius at tip (top, contacts model)
+            base_radius: Radius at base (bottom, on build plate)
 
         Returns:
             Trimesh object
         """
-        # Create cone
-        # Trimesh creates cone with point at origin, opening upward
-        # We need to flip and position it
-
         segments = 16  # Number of sides
 
-        # Create cone with tip at top, base at bottom
-        cone = trimesh.creation.cone(
+        # Create a cylinder and taper it to create proper cone
+        # Start with cylinder at base_radius (largest radius)
+        cylinder = trimesh.creation.cylinder(
             radius=base_radius,
             height=height,
             sections=segments
         )
 
-        # The cone is created with tip at (0,0,0) pointing up
-        # We need tip at top, base at bottom
-        # First flip it
-        flip_transform = trimesh.transformations.rotation_matrix(
-            np.pi, [1, 0, 0]
-        )
-        cone.apply_transform(flip_transform)
-
-        # Now scale the tip to be smaller
-        # We need a non-uniform scaling along the height
-        # Create a custom cone by modifying vertices
-        vertices = cone.vertices.copy()
-
-        # Find top and bottom vertices
+        # Cylinder is created centered at origin with height along Z
+        # Modify vertices to create taper from base to tip
+        vertices = cylinder.vertices.copy()
         z_vals = vertices[:, 2]
         z_min, z_max = z_vals.min(), z_vals.max()
 
         # Scale radially based on Z position
+        # Bottom (z_min) should be base_radius (large)
+        # Top (z_max) should be tip_radius (small)
         for i, vertex in enumerate(vertices):
             z_pos = vertex[2]
-            # Interpolate radius from tip to base
-            t = (z_pos - z_min) / (z_max - z_min)  # 0 at bottom, 1 at top
-            target_radius = base_radius + t * (tip_radius - base_radius)
+            # Interpolate: t=0 at bottom, t=1 at top
+            t = (z_pos - z_min) / (z_max - z_min) if z_max > z_min else 0
+
+            # Interpolate radius from base (large) to tip (small)
+            target_radius = base_radius * (1 - t) + tip_radius * t
 
             # Current radius
             current_radius = np.sqrt(vertex[0]**2 + vertex[1]**2)
@@ -163,14 +153,15 @@ class SupportGenerator:
                 vertices[i, 0] *= scale
                 vertices[i, 1] *= scale
 
-        cone.vertices = vertices
+        cylinder.vertices = vertices
 
         # Position the support
-        # Move so tip is at (x, y, z_base + height)
-        translation = [x, y, z_base + height - z_max]
-        cone.apply_translation(translation)
+        # Bottom should be at z_base, top at z_base + height
+        # Cylinder is centered at 0, so shift it up
+        translation = [x, y, z_base + height/2]
+        cylinder.apply_translation(translation)
 
-        return cone
+        return cylinder
 
     def _create_tree_support(self, x, y, z_top, z_bottom):
         """
