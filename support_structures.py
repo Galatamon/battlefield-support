@@ -1,24 +1,44 @@
 """
 Support structure generation
-Creates 3D geometry for support pillars
+Creates 3D geometry for support pillars with collision avoidance and lattice towers
 """
 
 import numpy as np
 import trimesh
 from config import SupportConfig
+from collision_detector import CollisionDetector
+from path_router import PathRouter
+from curved_support import CurvedSupportGenerator
+from lattice_tower import LatticeTowerGenerator
 
 
 class SupportGenerator:
-    """Generate 3D support structures"""
+    """Generate 3D support structures with collision avoidance"""
 
     def __init__(self, mesh, config=None):
         self.mesh = mesh
         self.config = config or {}
         self.support_meshes = []
 
+        # Initialize new components
+        print("  Initializing collision detection...")
+        self.collision_detector = CollisionDetector(mesh)
+
+        # Get build plate Z
+        self.build_plate_z = mesh.bounds[0, 2]
+
+        print("  Initializing path router...")
+        self.path_router = PathRouter(self.collision_detector, self.build_plate_z)
+
+        print("  Initializing curved support generator...")
+        self.curved_generator = CurvedSupportGenerator()
+
+        print("  Initializing lattice tower generator...")
+        self.lattice_generator = LatticeTowerGenerator()
+
     def generate_supports(self, support_points):
         """
-        Generate 3D support structures for all support points
+        Generate 3D support structures for all support points with collision avoidance
 
         Args:
             support_points: List of support point dictionaries
@@ -32,39 +52,92 @@ class SupportGenerator:
             print("  No supports needed")
             return None
 
-        # Get build plate level (minimum Z)
-        build_plate_z = self.mesh.bounds[0, 2]
-
-        # Generate support for each point
-        supports = []
+        # Phase 1: Route support paths with collision avoidance
+        print("  Phase 1: Routing support paths with collision avoidance...")
+        support_paths = []
 
         for i, point in enumerate(support_points):
-            support_mesh = self._create_support(
-                point['x'],
-                point['y'],
-                point['z'],
-                build_plate_z,
-                point.get('type', 'unknown')
+            start_point = [point['x'], point['y'], point['z']]
+
+            # Check minimum height
+            height = point['z'] - self.build_plate_z
+            if height < SupportConfig.MIN_SUPPORT_HEIGHT:
+                continue
+
+            # Route path from contact point to build plate
+            tip_radius = SupportConfig.SUPPORT_TIP_DIAMETER / 2
+            path = self.path_router.route_support_path(
+                start_point,
+                target_z=None,  # Will go to build plate
+                radius=tip_radius,
+                max_iterations=300
+            )
+
+            if path is not None:
+                # Smooth path to remove unnecessary waypoints
+                path = self.path_router.smooth_path(path, tip_radius)
+                support_paths.append(path)
+
+            if (i + 1) % 50 == 0:
+                print(f"    Routed {i+1}/{len(support_points)} paths...")
+
+        print(f"  Routed {len(support_paths)} support paths")
+
+        if not support_paths:
+            print("  Warning: No valid support paths could be generated")
+            return None
+
+        # Phase 2: Create lattice towers to consolidate support roots
+        print("  Phase 2: Creating lattice towers...")
+        tower_meshes, modified_paths = self.lattice_generator.consolidate_supports_with_towers(
+            support_paths, self.build_plate_z
+        )
+
+        if tower_meshes:
+            print(f"  Created {len(tower_meshes)} lattice towers")
+        else:
+            print("  No lattice towers needed (using individual supports)")
+            modified_paths = support_paths
+
+        # Phase 3: Generate support geometry following routed paths
+        print("  Phase 3: Generating support geometry...")
+        supports = []
+
+        tip_radius = SupportConfig.SUPPORT_TIP_DIAMETER / 2
+        base_radius = SupportConfig.SUPPORT_BASE_DIAMETER / 2
+
+        for i, path in enumerate(modified_paths):
+            if len(path) < 2:
+                continue
+
+            # Create curved support following path
+            support_mesh = self.curved_generator.create_curved_support(
+                path, tip_radius, base_radius
             )
 
             if support_mesh is not None:
                 supports.append(support_mesh)
 
             if (i + 1) % 100 == 0:
-                print(f"  Generated {i+1}/{len(support_points)} supports...")
+                print(f"    Generated {i+1}/{len(modified_paths)} support geometries...")
 
-        if not supports:
+        print(f"  Generated {len(supports)} support structures")
+
+        # Combine supports and towers
+        all_meshes = supports + tower_meshes
+
+        if not all_meshes:
             print("  Warning: No valid supports could be generated")
             return None
 
         # Combine all supports into one mesh
         print("  Combining support structures...")
-        combined_supports = trimesh.util.concatenate(supports)
+        combined_supports = trimesh.util.concatenate(all_meshes)
 
-        print(f"  Generated {len(supports)} support structures")
         print(f"  Total support volume: {combined_supports.volume:.2f} mm³")
+        print(f"  Total support surface area: {combined_supports.area:.2f} mm²")
 
-        self.support_meshes = supports
+        self.support_meshes = all_meshes
         return combined_supports
 
     def _create_support(self, x, y, z_top, z_bottom, support_type):
@@ -278,4 +351,10 @@ class SupportGenerator:
   Number of support structures: {len(self.support_meshes)}
   Total support volume: {supports.volume:.2f} mm³
   Support surface area: {supports.area:.2f} mm²
-  Estimated resin usage: {supports.volume / 1000:.2f} ml"""
+  Estimated resin usage: {supports.volume / 1000:.2f} ml
+
+  Features:
+  - Collision detection: {"Enabled" if SupportConfig.COLLISION_CHECK_ENABLED else "Disabled"}
+  - Lateral routing: {"Enabled" if SupportConfig.LATERAL_ROUTING_ENABLED else "Disabled"}
+  - Lattice towers: {"Enabled" if SupportConfig.LATTICE_TOWER_ENABLED else "Disabled"}
+  - Max support diameter: {SupportConfig.SUPPORT_MAX_DIAMETER} mm"""
