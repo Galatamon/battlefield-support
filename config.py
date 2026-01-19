@@ -56,7 +56,9 @@ class SupportConfig:
     LATTICE_TOWER_ENABLED = True  # Use lattice towers to consolidate support roots
     LATTICE_STRUT_DIAMETER = 0.8  # mm - diameter of lattice bracing struts
     LATTICE_MAIN_DIAMETER = 1.0  # mm - diameter of main lattice verticals
-    LATTICE_SPACING = 10.0  # mm - spacing between lattice tower centers
+    LATTICE_SPACING = 8.0  # mm - spacing between lattice tower centers (reduced from 10mm)
+    LATTICE_MAX_CLUSTER_SIZE = 30  # Maximum supports per tower before subdividing
+    LATTICE_MIN_CLUSTER_SIZE = 5  # Minimum supports to warrant a tower (was 3)
     LATTICE_BRACE_ANGLE = 60.0  # degrees - angle of diagonal braces
 
     # Collision avoidance and routing

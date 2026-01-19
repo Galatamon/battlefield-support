@@ -19,6 +19,7 @@ class LatticeTowerGenerator:
     def cluster_support_endpoints(self, support_endpoints, spacing=None):
         """
         Cluster support endpoints into groups for lattice towers
+        Subdivides large clusters to prevent mega-towers
 
         Args:
             support_endpoints: List of [x, y, z] points where supports reach down
@@ -31,9 +32,10 @@ class LatticeTowerGenerator:
             spacing = SupportConfig.LATTICE_SPACING
 
         endpoints = [np.array(p) for p in support_endpoints]
-        clusters = []
+        initial_clusters = []
         unclustered = set(range(len(endpoints)))
 
+        # Phase 1: Initial clustering based on spacing
         while unclustered:
             # Start new cluster with first unclustered point
             seed_idx = min(unclustered)
@@ -59,9 +61,57 @@ class LatticeTowerGenerator:
                     cluster.append(idx)
                     unclustered.remove(idx)
 
-            clusters.append(cluster)
+            initial_clusters.append(cluster)
 
-        return clusters
+        # Phase 2: Subdivide oversized clusters
+        final_clusters = []
+        max_size = SupportConfig.LATTICE_MAX_CLUSTER_SIZE
+
+        for cluster in initial_clusters:
+            if len(cluster) <= max_size:
+                final_clusters.append(cluster)
+            else:
+                # Subdivide large cluster using K-means-like approach
+                subdivided = self._subdivide_cluster(cluster, endpoints, max_size)
+                final_clusters.extend(subdivided)
+
+        return final_clusters
+
+    def _subdivide_cluster(self, cluster, endpoints, max_size):
+        """
+        Subdivide a large cluster into smaller sub-clusters
+
+        Args:
+            cluster: List of point indices
+            endpoints: List of all endpoint positions
+            max_size: Maximum cluster size
+
+        Returns:
+            List of sub-clusters
+        """
+        cluster_points = [endpoints[i] for i in cluster]
+
+        # Determine number of sub-clusters needed
+        num_subclusters = (len(cluster) + max_size - 1) // max_size
+
+        # Use simple spatial subdivision
+        # Sort by X coordinate and divide into strips
+        sorted_indices = sorted(cluster, key=lambda idx: endpoints[idx][0])
+
+        subclusters = []
+        subcluster_size = len(cluster) // num_subclusters
+
+        for i in range(num_subclusters):
+            start = i * subcluster_size
+            if i == num_subclusters - 1:
+                # Last cluster gets remaining points
+                end = len(sorted_indices)
+            else:
+                end = (i + 1) * subcluster_size
+
+            subclusters.append(sorted_indices[start:end])
+
+        return subclusters
 
     def create_lattice_tower(self, base_points, build_plate_z, tower_height=None):
         """
@@ -320,12 +370,19 @@ class LatticeTowerGenerator:
                 lowest = min(path, key=lambda p: p[2])
                 endpoints.append(lowest)
 
-        if len(endpoints) < 3:
+        if len(endpoints) < SupportConfig.LATTICE_MIN_CLUSTER_SIZE:
             # Not enough supports to warrant towers
             return [], support_paths
 
         # Cluster endpoints
         clusters = self.cluster_support_endpoints(endpoints)
+
+        print(f"    Clustered {len(endpoints)} endpoints into {len(clusters)} clusters")
+        for i, cluster in enumerate(clusters):
+            if len(cluster) >= SupportConfig.LATTICE_MIN_CLUSTER_SIZE:
+                print(f"    Cluster {i}: {len(cluster)} supports -> creating tower")
+            else:
+                print(f"    Cluster {i}: {len(cluster)} supports -> too small, using individual supports")
 
         tower_meshes = []
         modified_paths = []
@@ -339,7 +396,7 @@ class LatticeTowerGenerator:
         # Create towers for each cluster
         cluster_towers = {}
         for cluster_idx, cluster in enumerate(clusters):
-            if len(cluster) < 3:
+            if len(cluster) < SupportConfig.LATTICE_MIN_CLUSTER_SIZE:
                 # Too few supports for tower
                 continue
 
