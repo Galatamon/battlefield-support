@@ -46,19 +46,32 @@ class ResinConfig:
 class SupportConfig:
     """Support generation configuration"""
 
-    # Support geometry
+    # Support geometry - tiered system for detail preservation
+    # Light supports: for fine details, high-curvature areas
+    SUPPORT_TIP_DIAMETER_LIGHT = 0.2  # mm - minimal contact for delicate details
+    SUPPORT_BASE_DIAMETER_LIGHT = 0.6  # mm - thinner support body
+
+    # Medium supports: standard overhangs
+    SUPPORT_TIP_DIAMETER_MEDIUM = 0.3  # mm - standard contact point
+    SUPPORT_BASE_DIAMETER_MEDIUM = 0.8  # mm - standard support body
+
+    # Heavy supports: structural, large horizontal areas, low islands
+    SUPPORT_TIP_DIAMETER_HEAVY = 0.4  # mm - larger contact for stability
+    SUPPORT_BASE_DIAMETER_HEAVY = 1.0  # mm - thicker support body
+
+    # Default (for backwards compatibility)
     SUPPORT_TIP_DIAMETER = 0.3  # mm - minimal contact point
-    SUPPORT_BASE_DIAMETER = 1.0  # mm - maximum diameter (was 1.8mm)
+    SUPPORT_BASE_DIAMETER = 0.8  # mm - reduced from 1.0mm for less scarring
     SUPPORT_MAX_DIAMETER = 1.0  # mm - absolute maximum for any support element
     SUPPORT_TAPER_ANGLE = 7.0  # degrees
 
     # Lattice tower configuration
     LATTICE_TOWER_ENABLED = True  # Use lattice towers to consolidate support roots
-    LATTICE_STRUT_DIAMETER = 0.8  # mm - diameter of lattice bracing struts
-    LATTICE_MAIN_DIAMETER = 1.0  # mm - diameter of main lattice verticals
-    LATTICE_SPACING = 8.0  # mm - spacing between lattice tower centers (reduced from 10mm)
-    LATTICE_MAX_CLUSTER_SIZE = 30  # Maximum supports per tower before subdividing
-    LATTICE_MIN_CLUSTER_SIZE = 5  # Minimum supports to warrant a tower (was 3)
+    LATTICE_STRUT_DIAMETER = 0.6  # mm - reduced from 0.8mm
+    LATTICE_MAIN_DIAMETER = 0.8  # mm - reduced from 1.0mm
+    LATTICE_SPACING = 10.0  # mm - increased from 8mm for fewer towers
+    LATTICE_MAX_CLUSTER_SIZE = 25  # reduced from 30 for smaller towers
+    LATTICE_MIN_CLUSTER_SIZE = 6  # increased from 5 to reduce small towers
     LATTICE_BRACE_ANGLE = 60.0  # degrees - angle of diagonal braces
 
     # Collision avoidance and routing
@@ -68,23 +81,29 @@ class SupportConfig:
     MAX_ROUTING_ANGLE = 30.0  # degrees - maximum bend angle per segment
     LATERAL_ROUTING_ENABLED = True  # Allow supports to route laterally
 
-    # Detection thresholds
-    MAX_BRIDGE_LENGTH = 5.0  # mm - conservative for partially cured resin
-    MAX_OVERHANG_ANGLE = 45.0  # degrees from vertical
-    MIN_ISLAND_AREA = 0.5  # mm² - minimum area to warrant support
+    # Detection thresholds - optimized for modern resins
+    MAX_BRIDGE_LENGTH = 6.0  # mm - increased from 5mm (ABS-like resins handle this)
+    MAX_OVERHANG_ANGLE = 50.0  # degrees from vertical - increased from 45 (resin self-supports better)
+    MIN_ISLAND_AREA = 0.8  # mm² - increased from 0.5 (tiny islands often print fine)
 
-    # Support density
-    SUPPORT_SPACING = 3.0  # mm - distance between support points
-    EDGE_SUPPORT_SPACING = 2.0  # mm - closer spacing near edges
+    # Support density - optimized for miniatures
+    SUPPORT_SPACING = 4.0  # mm - increased from 3mm for less density
+    EDGE_SUPPORT_SPACING = 2.5  # mm - increased from 2mm
 
     # Safety margins
-    SAFETY_MARGIN = 1.2  # multiply by this factor for safety
+    SAFETY_MARGIN = 1.0  # reduced from 1.2 - modern resins don't need 20% extra
     MIN_SUPPORT_HEIGHT = 1.0  # mm - minimum support height
 
     # Auto-orientation preferences
     PREFER_FLAT_BASE = True  # prefer orientation with large flat bottom
     MINIMIZE_SUPPORT_AREA = True  # minimize total support contact area
     PREFER_HIDDEN_SUPPORTS = True  # prefer supports on less visible surfaces
+
+    # Optimization settings
+    OPTIMIZATION_ENABLED = True  # Enable support point optimization
+    MERGE_RADIUS = 1.5  # mm - merge support points closer than this
+    DETAIL_CURVATURE_THRESHOLD = 0.5  # Curvature threshold for detail detection
+    THIN_FEATURE_THRESHOLD = 2.0  # mm - thickness below this is considered "thin"
 
 
 class AnalysisConfig:

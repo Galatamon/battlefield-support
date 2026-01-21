@@ -14,6 +14,7 @@ from orientation import OrientationOptimizer
 from island_detector import IslandDetector
 from overhang_detector import OverhangDetector
 from support_structures import SupportGenerator
+from support_optimizer import SupportOptimizer
 from config import (
     PrinterConfig, ResinConfig, SupportConfig, AnalysisConfig, get_config
 )
@@ -39,9 +40,14 @@ def print_config_info():
     print(f"  Resin: {ResinConfig.RESIN_NAME}")
     print(f"    Tensile Strength: {ResinConfig.TENSILE_STRENGTH} MPa")
     print(f"  Support Parameters:")
-    print(f"    Tip Diameter: {SupportConfig.SUPPORT_TIP_DIAMETER}mm")
+    print(f"    Tip Diameter: {SupportConfig.SUPPORT_TIP_DIAMETER}mm (light: {SupportConfig.SUPPORT_TIP_DIAMETER_LIGHT}mm)")
+    print(f"    Base Diameter: {SupportConfig.SUPPORT_BASE_DIAMETER}mm")
+    print(f"    Support Spacing: {SupportConfig.SUPPORT_SPACING}mm")
     print(f"    Max Bridge Length: {SupportConfig.MAX_BRIDGE_LENGTH}mm")
     print(f"    Max Overhang Angle: {SupportConfig.MAX_OVERHANG_ANGLE}°")
+    print(f"  Optimization:")
+    print(f"    Merge Radius: {SupportConfig.MERGE_RADIUS}mm")
+    print(f"    Safety Margin: {SupportConfig.SAFETY_MARGIN}x")
     print()
 
 
@@ -106,6 +112,21 @@ Examples:
     parser.add_argument('--show-config', action='store_true',
                         help='Show configuration and exit')
 
+    # Optimization options
+    parser.add_argument('--no-optimize', action='store_true',
+                        help='Disable support point optimization')
+
+    parser.add_argument('--miniature-mode', action='store_true',
+                        help='Optimize for miniatures (aggressive detail preservation)')
+
+    parser.add_argument('--merge-radius', type=float,
+                        default=SupportConfig.MERGE_RADIUS,
+                        help=f'Radius for merging nearby support points (default: {SupportConfig.MERGE_RADIUS}mm)')
+
+    parser.add_argument('--support-spacing', type=float,
+                        default=SupportConfig.SUPPORT_SPACING,
+                        help=f'Distance between support points (default: {SupportConfig.SUPPORT_SPACING}mm)')
+
     return parser.parse_args()
 
 
@@ -134,15 +155,33 @@ def main():
         input_path = Path(args.input)
         output_file = str(input_path.parent / f"{input_path.stem}_supported.stl")
 
-    # Print configuration
-    print_config_info()
+    # Apply miniature mode if requested (overrides other settings)
+    if args.miniature_mode:
+        print("Miniature Mode: Optimizing for detail preservation")
+        # Even more aggressive settings for miniatures
+        SupportConfig.SUPPORT_SPACING = 5.0  # Very sparse
+        SupportConfig.EDGE_SUPPORT_SPACING = 3.0
+        SupportConfig.MAX_OVERHANG_ANGLE = 55.0  # Let resin self-support more
+        SupportConfig.MAX_BRIDGE_LENGTH = 7.0  # Longer bridges
+        SupportConfig.MIN_ISLAND_AREA = 1.0  # Skip tiny islands
+        SupportConfig.MERGE_RADIUS = 2.0  # Aggressive merging
+        SupportConfig.SAFETY_MARGIN = 1.0  # No safety margin
+        SupportConfig.SUPPORT_TIP_DIAMETER = 0.25  # Smaller tips
+        SupportConfig.SUPPORT_BASE_DIAMETER = 0.7  # Thinner supports
+        print()
 
-    # Update config from command line
-    SupportConfig.SUPPORT_TIP_DIAMETER = args.support_tip
-    SupportConfig.MAX_BRIDGE_LENGTH = args.max_bridge
-    SupportConfig.MIN_ISLAND_AREA = args.min_island_area
-    SupportConfig.MAX_OVERHANG_ANGLE = args.overhang_angle
+    # Update config from command line (only if not in miniature mode)
+    if not args.miniature_mode:
+        SupportConfig.SUPPORT_TIP_DIAMETER = args.support_tip
+        SupportConfig.MAX_BRIDGE_LENGTH = args.max_bridge
+        SupportConfig.MIN_ISLAND_AREA = args.min_island_area
+        SupportConfig.MAX_OVERHANG_ANGLE = args.overhang_angle
+        SupportConfig.SUPPORT_SPACING = args.support_spacing
+    SupportConfig.MERGE_RADIUS = args.merge_radius
     AnalysisConfig.SLICE_LAYER_HEIGHT = args.layer_height
+
+    # Print configuration (after all settings applied)
+    print_config_info()
 
     print("="*60)
     print("STEP 1: Loading Model")
@@ -212,21 +251,35 @@ def main():
 
         if not args.no_overhangs:
             overhang_points = overhang_detector.detect_overhangs(
-                max_angle=args.overhang_angle
+                max_angle=SupportConfig.MAX_OVERHANG_ANGLE
             )
             all_support_points.extend(overhang_points)
 
         if not args.no_bridges:
             bridge_points = overhang_detector.detect_bridges(
-                max_length=args.max_bridge
+                max_length=SupportConfig.MAX_BRIDGE_LENGTH
             )
             all_support_points.extend(bridge_points)
 
         print(overhang_detector.get_detection_summary(all_support_points))
 
+    # Optimize support points
+    if not args.no_optimize and all_support_points:
+        print("\n" + "="*60)
+        print("STEP 5: Support Optimization")
+        print("="*60)
+
+        optimizer_config = {
+            'merge_radius': SupportConfig.MERGE_RADIUS,
+            'curvature_threshold': SupportConfig.DETAIL_CURVATURE_THRESHOLD,
+            'thin_feature_threshold': SupportConfig.THIN_FEATURE_THRESHOLD,
+        }
+        optimizer = SupportOptimizer(mesh, config=optimizer_config)
+        all_support_points = optimizer.optimize_support_points(all_support_points)
+
     # Generate supports
     print("\n" + "="*60)
-    print("STEP 5: Support Generation")
+    print("STEP 6: Support Generation")
     print("="*60)
 
     generator = SupportGenerator(mesh)
@@ -243,7 +296,7 @@ def main():
 
     # Export
     print("\n" + "="*60)
-    print("STEP 6: Export")
+    print("STEP 7: Export")
     print("="*60)
 
     try:

@@ -10,6 +10,7 @@ from collision_detector import CollisionDetector
 from path_router import PathRouter
 from curved_support import CurvedSupportGenerator
 from lattice_tower import LatticeTowerGenerator
+from support_optimizer import get_support_tip_diameter, get_support_base_diameter
 
 
 class SupportGenerator:
@@ -55,6 +56,7 @@ class SupportGenerator:
         # Phase 1: Route support paths with collision avoidance
         print("  Phase 1: Routing support paths with collision avoidance...")
         support_paths = []
+        support_tiers = []  # Track tier for each path
 
         for i, point in enumerate(support_points):
             start_point = [point['x'], point['y'], point['z']]
@@ -64,8 +66,11 @@ class SupportGenerator:
             if height < SupportConfig.MIN_SUPPORT_HEIGHT:
                 continue
 
+            # Get tier-specific tip diameter
+            tier = point.get('tier', 'medium')
+            tip_radius = get_support_tip_diameter(tier) / 2
+
             # Route path from contact point to build plate
-            tip_radius = SupportConfig.SUPPORT_TIP_DIAMETER / 2
             path = self.path_router.route_support_path(
                 start_point,
                 target_z=None,  # Will go to build plate
@@ -77,6 +82,7 @@ class SupportGenerator:
                 # Smooth path to remove unnecessary waypoints
                 path = self.path_router.smooth_path(path, tip_radius)
                 support_paths.append(path)
+                support_tiers.append(tier)
 
             if (i + 1) % 50 == 0:
                 print(f"    Routed {i+1}/{len(support_points)} paths...")
@@ -103,12 +109,20 @@ class SupportGenerator:
         print("  Phase 3: Generating support geometry...")
         supports = []
 
-        tip_radius = SupportConfig.SUPPORT_TIP_DIAMETER / 2
-        base_radius = SupportConfig.SUPPORT_BASE_DIAMETER / 2
+        # Handle tier mapping for modified paths (some may have been combined in towers)
+        # Default to medium for paths without tier info
+        if len(support_tiers) != len(modified_paths):
+            # Paths were modified by tower consolidation, use default sizing
+            support_tiers = ['medium'] * len(modified_paths)
 
         for i, path in enumerate(modified_paths):
             if len(path) < 2:
                 continue
+
+            # Get tier-specific diameters
+            tier = support_tiers[i] if i < len(support_tiers) else 'medium'
+            tip_radius = get_support_tip_diameter(tier) / 2
+            base_radius = get_support_base_diameter(tier) / 2
 
             # Create curved support following path
             support_mesh = self.curved_generator.create_curved_support(

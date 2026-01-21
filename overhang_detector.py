@@ -60,14 +60,31 @@ class OverhangDetector:
             )
 
             # Calculate support density based on angle
-            # More horizontal = more support needed
-            if angle_from_horizontal < 30:
-                spacing = SupportConfig.EDGE_SUPPORT_SPACING
+            # Near-horizontal surfaces need more support, but not excessively
+            if angle_from_horizontal < 20:
+                # Very horizontal - needs good support but scale with area
+                base_spacing = SupportConfig.EDGE_SUPPORT_SPACING
+            elif angle_from_horizontal < 40:
+                # Moderately horizontal - standard spacing
+                base_spacing = SupportConfig.SUPPORT_SPACING
             else:
-                spacing = SupportConfig.SUPPORT_SPACING
+                # More vertical - can use sparser spacing
+                base_spacing = SupportConfig.SUPPORT_SPACING * 1.5
 
-            # Number of supports for this face
+            # Adaptive spacing: larger areas get proportionally sparser supports
+            # This prevents "mat of supports" on large flat areas
+            # The relationship is: effective_spacing = base_spacing * (1 + log10(area/10))
+            # So a 10mm² area uses base_spacing, 100mm² uses 2x spacing, etc.
+            if area > 10.0:
+                area_factor = 1.0 + 0.3 * np.log10(area / 10.0)
+                spacing = base_spacing * min(area_factor, 2.5)  # Cap at 2.5x
+            else:
+                spacing = base_spacing
+
+            # Number of supports for this face - with reasonable cap
             num_supports = max(1, int(np.ceil(area / (spacing ** 2))))
+            # Cap maximum supports per face to prevent over-support
+            num_supports = min(num_supports, 8)
 
             if num_supports == 1:
                 # Single support at center
