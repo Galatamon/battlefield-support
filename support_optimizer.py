@@ -106,7 +106,7 @@ class SupportOptimizer:
         # Thin features have vertices very close to other vertices on the "opposite" side
         try:
             # Try ray-based detection if rtree is available
-            sample_size = min(500, len(self.mesh.vertices))
+            sample_size = min(2000, len(self.mesh.vertices))
             sample_indices = np.random.choice(len(self.mesh.vertices), sample_size, replace=False)
 
             for v_idx in sample_indices:
@@ -291,29 +291,40 @@ class SupportOptimizer:
 
     def classify_support_tier(self, support_point):
         """
-        Classify a support point into light/medium/heavy tier
+        Classify a support point into micro/light/medium/heavy tier
 
         Args:
-            support_point: Support point dictionary
+            support_point: Support point dictionary. May contain 'detail_score',
+                'is_thin_feature' (set by tag_points_with_face_metadata) for
+                more accurate classification.
 
         Returns:
-            'light', 'medium', or 'heavy'
+            'micro', 'light', 'medium', or 'heavy'
         """
         coord = [support_point['x'], support_point['y'], support_point['z']]
-        detail_score = self.get_detail_score_at_point(coord)
+        detail_score = support_point.get('detail_score')
+        if detail_score is None:
+            detail_score = self.get_detail_score_at_point(coord)
 
         # Get point properties
         area = support_point.get('area', 0)
         angle = support_point.get('angle', 45)  # degrees from horizontal
         point_type = support_point.get('type', '')
         height = support_point['z'] - self.mesh.bounds[0, 2]
+        is_thin = support_point.get('is_thin_feature', False)
 
-        # Decision logic for tier assignment
-        # Light: High detail areas, small features, near-vertical surfaces
-        # Medium: Standard overhangs, moderate areas
-        # Heavy: Large horizontal surfaces, structural areas, islands at low height
+        # Micro tier: ultra-fine features (antennae tips, barrel tips, etc.).
+        # `is_thin_feature` alone is too generous on small models (the entire
+        # torso of a 8mm-wide mech reads as "thin" at the 2mm threshold), so we
+        # require corroborating evidence: small face area or steep angle.
+        if area > 0 and area < 0.5 and angle > 50:
+            return 'micro'
+        if is_thin and detail_score > 0.7:
+            return 'micro'
+        if detail_score > 0.9:
+            return 'micro'
 
-        # High detail areas always get light supports
+        # High detail areas get light supports
         if detail_score > 0.6:
             return 'light'
 
@@ -342,7 +353,7 @@ class SupportOptimizer:
 
     def assign_support_tiers(self, support_points):
         """
-        Assign tier (light/medium/heavy) to each support point
+        Assign tier (micro/light/medium/heavy) to each support point
 
         Args:
             support_points: List of support point dictionaries
@@ -352,15 +363,62 @@ class SupportOptimizer:
         """
         print("  Assigning support tiers...")
 
-        tier_counts = {'light': 0, 'medium': 0, 'heavy': 0}
+        tier_counts = {'micro': 0, 'light': 0, 'medium': 0, 'heavy': 0}
 
         for point in support_points:
             tier = self.classify_support_tier(point)
             point['tier'] = tier
             tier_counts[tier] += 1
 
-        print(f"    Light: {tier_counts['light']}, Medium: {tier_counts['medium']}, Heavy: {tier_counts['heavy']}")
+        print(f"    Micro: {tier_counts['micro']}, Light: {tier_counts['light']}, "
+              f"Medium: {tier_counts['medium']}, Heavy: {tier_counts['heavy']}")
         return support_points
+
+    def tag_points_with_face_metadata(self, support_points):
+        """
+        For each support point, find the closest mesh face and attach metadata
+        (face_index, face_normal, detail_score, is_thin_feature). Mutates and
+        returns the input list.
+        """
+        if not support_points:
+            return support_points
+
+        # KDTree over face centers is more accurate than vertex KDTree for
+        # classifying which face a contact actually lives on.
+        face_centers = self.mesh.triangles_center
+        face_tree = KDTree(face_centers)
+
+        for point in support_points:
+            coord = [point['x'], point['y'], point['z']]
+            _, face_idx = face_tree.query(coord)
+            point['face_index'] = int(face_idx)
+            point['face_normal'] = self.mesh.face_normals[face_idx].tolist()
+
+            if 'detail_score' not in point:
+                point['detail_score'] = float(self.face_detail_scores[face_idx])
+
+            if 'is_thin_feature' not in point:
+                # A face is "thin" if any of its 3 vertices was tagged thin.
+                face_verts = self.mesh.faces[face_idx]
+                point['is_thin_feature'] = bool(np.any(self.thin_features[face_verts]))
+
+        return support_points
+
+    def get_per_point_radii(self, support_points):
+        """
+        Return parallel lists of tip and base radii for each support point
+        based on its assigned tier.
+
+        Returns:
+            (tip_radii, base_radii) - two lists of floats, same length as input
+        """
+        tip_radii = []
+        base_radii = []
+        for p in support_points:
+            tier = p.get('tier', 'medium')
+            tip_radii.append(get_support_tip_diameter(tier) / 2)
+            base_radii.append(get_support_base_diameter(tier) / 2)
+        return tip_radii, base_radii
 
     def adaptive_spacing_filter(self, support_points):
         """
@@ -419,9 +477,10 @@ class SupportOptimizer:
                 # Remove redundant neighbors (keep current point, remove others)
                 for n in neighbors:
                     if n != i and kept[n]:
-                        # Keep the one with higher priority (lower tier or more critical)
+                        # Keep the one with higher priority. Lower number = higher
+                        # priority (more structural / harder to skip).
                         other_tier = layer_points[n].get('tier', 'medium')
-                        tier_priority = {'heavy': 0, 'medium': 1, 'light': 2}
+                        tier_priority = {'heavy': 0, 'medium': 1, 'light': 2, 'micro': 3}
 
                         if tier_priority.get(other_tier, 1) > tier_priority.get(tier, 1):
                             kept[n] = False
@@ -450,10 +509,14 @@ class SupportOptimizer:
         # Step 1: Consolidate nearby points
         points = self.consolidate_support_points(support_points)
 
-        # Step 2: Assign support tiers
+        # Step 2: Tag each point with face metadata (used by both tier
+        # classification and downstream front-face avoidance).
+        points = self.tag_points_with_face_metadata(points)
+
+        # Step 3: Assign support tiers
         points = self.assign_support_tiers(points)
 
-        # Step 3: Apply adaptive spacing
+        # Step 4: Apply adaptive spacing
         points = self.adaptive_spacing_filter(points)
 
         final_count = len(points)
@@ -465,35 +528,24 @@ class SupportOptimizer:
 
 def get_support_tip_diameter(tier):
     """
-    Get support tip diameter based on tier
-
-    Args:
-        tier: 'light', 'medium', or 'heavy'
-
-    Returns:
-        Tip diameter in mm
+    Get support tip diameter based on tier. Reads from SupportConfig so
+    --micro-tip and other CLI overrides take effect at call time.
     """
     diameters = {
-        'light': 0.2,   # Very small contact for delicate details
-        'medium': 0.3,  # Standard contact
-        'heavy': 0.4    # Larger contact for structural support
+        'micro':  SupportConfig.SUPPORT_TIP_DIAMETER_MICRO,
+        'light':  SupportConfig.SUPPORT_TIP_DIAMETER_LIGHT,
+        'medium': SupportConfig.SUPPORT_TIP_DIAMETER_MEDIUM,
+        'heavy':  SupportConfig.SUPPORT_TIP_DIAMETER_HEAVY,
     }
-    return diameters.get(tier, 0.3)
+    return diameters.get(tier, SupportConfig.SUPPORT_TIP_DIAMETER_MEDIUM)
 
 
 def get_support_base_diameter(tier):
-    """
-    Get support base diameter based on tier
-
-    Args:
-        tier: 'light', 'medium', or 'heavy'
-
-    Returns:
-        Base diameter in mm
-    """
+    """Get support base diameter based on tier."""
     diameters = {
-        'light': 0.6,   # Thinner support
-        'medium': 0.8,  # Standard
-        'heavy': 1.0    # Thicker for stability
+        'micro':  SupportConfig.SUPPORT_BASE_DIAMETER_MICRO,
+        'light':  SupportConfig.SUPPORT_BASE_DIAMETER_LIGHT,
+        'medium': SupportConfig.SUPPORT_BASE_DIAMETER_MEDIUM,
+        'heavy':  SupportConfig.SUPPORT_BASE_DIAMETER_HEAVY,
     }
-    return diameters.get(tier, 0.8)
+    return diameters.get(tier, SupportConfig.SUPPORT_BASE_DIAMETER_MEDIUM)

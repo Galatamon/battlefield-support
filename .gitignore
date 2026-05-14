@@ -47,3 +47,8 @@ Thumbs.db
 output/
 temp/
 *.log
+
+# Generated outputs from the CLI (preview PNGs and per-run metadata)
+test_models/*_preview.png
+test_models/*_supports_meta.json
+single_support.stl

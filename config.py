@@ -47,6 +47,10 @@ class SupportConfig:
     """Support generation configuration"""
 
     # Support geometry - tiered system for detail preservation
+    # Micro supports: for sub-0.5mm features (antennae, barrel tips, fine details)
+    SUPPORT_TIP_DIAMETER_MICRO = 0.15  # mm - minimal contact for ultra-fine features
+    SUPPORT_BASE_DIAMETER_MICRO = 0.45  # mm - very thin support body
+
     # Light supports: for fine details, high-curvature areas
     SUPPORT_TIP_DIAMETER_LIGHT = 0.2  # mm - minimal contact for delicate details
     SUPPORT_BASE_DIAMETER_LIGHT = 0.6  # mm - thinner support body
@@ -99,6 +103,14 @@ class SupportConfig:
     MINIMIZE_SUPPORT_AREA = True  # minimize total support contact area
     PREFER_HIDDEN_SUPPORTS = True  # prefer supports on less visible surfaces
 
+    # BattleTech front-face preservation
+    # The "front" of a mech is the side the wargamer sees on the table. We must
+    # never scar it with supports, and we must never orient it facing the build plate.
+    FRONT_FACE_CONE_DEG = 60.0          # half-angle of "front cone" for face classification
+    FRONT_FACE_SCAR_PENALTY = 25.0      # weight in orientation scorer when front faces -Z
+    MAX_FRONT_SELF_BRIDGE_MM = 3.0      # span the resin can self-bridge if a front overhang is skipped
+    STRICT_FRONT_DEFAULT = False        # default policy: snap off front faces (False) vs strict-skip (True)
+
     # Optimization settings
     OPTIMIZATION_ENABLED = True  # Enable support point optimization
     MERGE_RADIUS = 1.5  # mm - merge support points closer than this
@@ -118,7 +130,9 @@ class AnalysisConfig:
 
     # Overhang detection
     OVERHANG_SAMPLE_DISTANCE = 0.5  # mm - sampling resolution
-    OVERHANG_MIN_AREA = 1.0  # mm² - minimum overhang area to support
+    OVERHANG_MIN_AREA = 0.1  # mm² - reduced from 1.0 to catch BattleTech-scale
+                              # micro features (antennae, weapon-barrel tips) that
+                              # need the micro support tier to print intact
 
     # Bridge detection
     BRIDGE_SAMPLE_POINTS = 20  # number of points to sample along potential bridges

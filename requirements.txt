@@ -4,3 +4,4 @@ scipy>=1.11.0
 shapely>=2.0.0
 networkx>=3.0
 rtree>=1.0.0
+matplotlib>=3.7

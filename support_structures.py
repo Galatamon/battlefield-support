@@ -5,6 +5,7 @@ Creates 3D geometry for support pillars with collision avoidance and lattice tow
 
 import numpy as np
 import trimesh
+from collections import deque
 from config import SupportConfig
 from collision_detector import CollisionDetector
 from path_router import PathRouter
@@ -16,10 +17,18 @@ from support_optimizer import get_support_tip_diameter, get_support_base_diamete
 class SupportGenerator:
     """Generate 3D support structures with collision avoidance"""
 
-    def __init__(self, mesh, config=None):
+    def __init__(self, mesh, config=None, front_axis=None, strict_front=False):
         self.mesh = mesh
         self.config = config or {}
         self.support_meshes = []
+
+        # BattleTech: front-axis is a unit vector in world coords. Support
+        # contacts whose face normal points within FRONT_FACE_CONE_DEG of this
+        # vector are "front" and must be snapped or skipped.
+        self.front_axis = (np.array(front_axis, dtype=float)
+                           if front_axis is not None else None)
+        self.strict_front = bool(strict_front)
+        self.contact_metadata = []
 
         # Initialize new components
         print("  Initializing collision detection...")
@@ -37,6 +46,138 @@ class SupportGenerator:
         print("  Initializing lattice tower generator...")
         self.lattice_generator = LatticeTowerGenerator()
 
+    def _classify_point_relative_to_front(self, point):
+        """
+        Classify a support contact relative to the front axis.
+
+        Returns:
+            'front' if the contact face normal is within FRONT_FACE_CONE_DEG of +front_axis,
+            'back'  if within FRONT_FACE_CONE_DEG of -front_axis,
+            'side'  otherwise.
+        """
+        if self.front_axis is None or 'face_normal' not in point:
+            return 'side'
+
+        normal = np.asarray(point['face_normal'], dtype=float)
+        n = np.linalg.norm(normal)
+        if n < 1e-9:
+            return 'side'
+        normal = normal / n
+
+        cos_threshold = np.cos(np.radians(SupportConfig.FRONT_FACE_CONE_DEG))
+        front_dot = float(np.dot(normal, self.front_axis))
+        if front_dot >= cos_threshold:
+            return 'front'
+        if front_dot <= -cos_threshold:
+            return 'back'
+        return 'side'
+
+    def _snap_off_front_face(self, point):
+        """
+        Walk the face-adjacency graph (BFS up to depth 3) from the point's
+        face looking for a face whose normal is NOT in the front cone. If
+        found, move the contact to that face's center, nudged slightly along
+        its inward normal so the support tip embeds slightly into the
+        non-front surface (and the contact ends up under an edge, not on the
+        visible front).
+
+        Returns the (possibly mutated) point and a bool indicating success.
+        """
+        if self.front_axis is None or 'face_index' not in point:
+            return point, False
+
+        start_idx = int(point['face_index'])
+        cos_threshold = np.cos(np.radians(SupportConfig.FRONT_FACE_CONE_DEG))
+
+        # Build face adjacency (cached on the mesh)
+        adjacency = self.mesh.face_adjacency  # (M, 2) pairs of face indices
+        adj_map = {}
+        for a, b in adjacency:
+            adj_map.setdefault(int(a), []).append(int(b))
+            adj_map.setdefault(int(b), []).append(int(a))
+
+        visited = {start_idx}
+        queue = deque([(start_idx, 0)])
+        max_depth = 3
+        best_face = None
+
+        while queue:
+            face_idx, depth = queue.popleft()
+            if depth > max_depth:
+                continue
+            normal = self.mesh.face_normals[face_idx]
+            if depth > 0 and float(np.dot(normal, self.front_axis)) < cos_threshold:
+                best_face = face_idx
+                break
+            for neighbor in adj_map.get(face_idx, []):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, depth + 1))
+
+        if best_face is None:
+            return point, False
+
+        # Move the contact to the centroid of the chosen face, nudged inward
+        # by a tiny amount along that face's normal (so the support tip
+        # actually touches geometry, not floats next to it).
+        new_center = self.mesh.triangles_center[best_face]
+        new_normal = self.mesh.face_normals[best_face]
+        nudge = 0.05  # mm
+        new_pos = new_center - new_normal * nudge
+
+        point['x'] = float(new_pos[0])
+        point['y'] = float(new_pos[1])
+        point['z'] = float(new_pos[2])
+        point['face_index'] = int(best_face)
+        point['face_normal'] = new_normal.tolist()
+        point['snapped_from_front'] = True
+        return point, True
+
+    def _apply_front_face_policy(self, support_points):
+        """
+        Classify each point and either snap it off the front face or (if
+        strict_front and the resin can self-bridge the gap) drop it. Returns
+        the filtered, possibly-mutated list.
+        """
+        if self.front_axis is None:
+            for p in support_points:
+                p['face_class'] = 'side'
+            return support_points
+
+        kept = []
+        front_in = 0
+        snapped = 0
+        skipped = 0
+        unsnap_able = 0
+
+        for p in support_points:
+            cls = self._classify_point_relative_to_front(p)
+            if cls == 'front':
+                front_in += 1
+                if self.strict_front:
+                    # Strict policy: skip if the unsupported span is short
+                    # enough that ABS-like resin can self-bridge.
+                    bridge = p.get('bridge_length', 0.0) or 0.0
+                    if bridge and bridge < SupportConfig.MAX_FRONT_SELF_BRIDGE_MM:
+                        skipped += 1
+                        continue
+                p, ok = self._snap_off_front_face(p)
+                if ok:
+                    snapped += 1
+                    p['face_class'] = self._classify_point_relative_to_front(p)
+                else:
+                    unsnap_able += 1
+                    # Last resort: keep the point but flag it so the preview
+                    # paints it red as a known scar.
+                    p['face_class'] = 'front'
+            else:
+                p['face_class'] = cls
+            kept.append(p)
+
+        print(f"  Front-face policy: {front_in} on front cone "
+              f"({snapped} snapped, {skipped} skipped, {unsnap_able} kept as scar)")
+        return kept
+
     def generate_supports(self, support_points):
         """
         Generate 3D support structures for all support points with collision avoidance
@@ -53,10 +194,14 @@ class SupportGenerator:
             print("  No supports needed")
             return None
 
+        # Phase 0: Front-face policy (BattleTech) — classify + snap/skip
+        support_points = self._apply_front_face_policy(support_points)
+
         # Phase 1: Route support paths with collision avoidance
         print("  Phase 1: Routing support paths with collision avoidance...")
         support_paths = []
         support_tiers = []  # Track tier for each path
+        per_path_meta = []  # Parallel metadata list for contact_metadata
 
         for i, point in enumerate(support_points):
             start_point = [point['x'], point['y'], point['z']]
@@ -83,6 +228,13 @@ class SupportGenerator:
                 path = self.path_router.smooth_path(path, tip_radius)
                 support_paths.append(path)
                 support_tiers.append(tier)
+                per_path_meta.append({
+                    'xyz': [float(point['x']), float(point['y']), float(point['z'])],
+                    'tier': tier,
+                    'tip_radius': float(tip_radius),
+                    'face_class': point.get('face_class', 'side'),
+                    'type': point.get('type', ''),
+                })
 
             if (i + 1) % 50 == 0:
                 print(f"    Routed {i+1}/{len(support_points)} paths...")
@@ -109,22 +261,19 @@ class SupportGenerator:
         print("  Phase 3: Generating support geometry...")
         supports = []
 
-        # Handle tier mapping for modified paths (some may have been combined in towers)
-        # Default to medium for paths without tier info
+        # consolidate_supports_with_towers preserves index order, so tier
+        # alignment with paths is intact unless the routing dropped a support.
         if len(support_tiers) != len(modified_paths):
-            # Paths were modified by tower consolidation, use default sizing
             support_tiers = ['medium'] * len(modified_paths)
 
         for i, path in enumerate(modified_paths):
             if len(path) < 2:
                 continue
 
-            # Get tier-specific diameters
             tier = support_tiers[i] if i < len(support_tiers) else 'medium'
             tip_radius = get_support_tip_diameter(tier) / 2
             base_radius = get_support_base_diameter(tier) / 2
 
-            # Create curved support following path
             support_mesh = self.curved_generator.create_curved_support(
                 path, tip_radius, base_radius
             )
@@ -144,6 +293,9 @@ class SupportGenerator:
             print("  Warning: No valid supports could be generated")
             return None
 
+        # Stash contact metadata for the preview renderer + sidecar JSON.
+        self.contact_metadata = per_path_meta
+
         # Combine all supports into one mesh
         print("  Combining support structures...")
         combined_supports = trimesh.util.concatenate(all_meshes)
@@ -152,6 +304,7 @@ class SupportGenerator:
         print(f"  Total support surface area: {combined_supports.area:.2f} mm²")
 
         self.support_meshes = all_meshes
+        self._last_supports = combined_supports
         return combined_supports
 
     def _create_support(self, x, y, z_top, z_bottom, support_type):

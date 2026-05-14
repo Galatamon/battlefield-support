@@ -5,9 +5,19 @@ Render visual preview of STL models
 
 import trimesh
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # headless
 import matplotlib.pyplot as plt
 from matplotlib import patches
 import os
+
+
+FACE_CLASS_COLOR = {
+    'front': '#2ecc71',   # green = visible front (we want zero of these)
+    'side':  '#f1c40f',   # yellow = acceptable
+    'back':  '#3498db',   # blue = back / underside
+    'unknown': '#7f8c8d',
+}
 
 def render_stl_views(filepath, output_image):
     """Render front, side, and top views of an STL"""
@@ -183,6 +193,98 @@ def setup_axis(ax, mesh):
 
     # Smaller tick labels
     ax.tick_params(labelsize=7)
+
+def _view_for_front(front_axis):
+    """
+    Compute matplotlib (elev, azim) so the front of the mech faces the camera.
+
+    Matplotlib's 3D azim=0 looks along +X (toward origin), elev=0 is horizontal.
+    We want the camera to be on the +front_axis side looking toward origin.
+    """
+    if front_axis is None:
+        return (15, -60)
+    fx, fy = float(front_axis[0]), float(front_axis[1])
+    # azim such that view direction (toward origin) is roughly opposite to front
+    azim = np.degrees(np.arctan2(fy, fx)) - 90.0
+    return (0, azim)
+
+
+def render_support_preview(model_mesh, contact_metadata, output_image, front_axis=None):
+    """
+    Render a 3-panel preview of the model with support contact points colored by
+    face_class (green=front=visible, yellow=side, blue=back).
+
+    Args:
+        model_mesh: trimesh.Trimesh of the ORIGINAL model (already oriented).
+        contact_metadata: list of dicts with 'xyz', 'tier', 'tip_radius', 'face_class'.
+        output_image: output PNG path.
+        front_axis: numpy array; used to pick the "front view" camera angle.
+    """
+    fig = plt.figure(figsize=(15, 5))
+    fig.suptitle('Support contact preview — green=FRONT (avoid), yellow=side, blue=back',
+                 fontsize=11, fontweight='bold')
+
+    ax_front = fig.add_subplot(131, projection='3d')
+    ax_side = fig.add_subplot(132, projection='3d')
+    ax_iso = fig.add_subplot(133, projection='3d')
+
+    ax_front.set_title('Front view (visible side)', fontsize=10)
+    ax_side.set_title('Side view', fontsize=10)
+    ax_iso.set_title('Iso view', fontsize=10)
+
+    front_elev, front_azim = _view_for_front(front_axis)
+    side_elev, side_azim = (front_elev, front_azim + 90)
+
+    for ax in (ax_front, ax_side, ax_iso):
+        ax.plot_trisurf(
+            model_mesh.vertices[:, 0],
+            model_mesh.vertices[:, 1],
+            model_mesh.vertices[:, 2],
+            triangles=model_mesh.faces,
+            color='lightgrey',
+            alpha=0.45,
+            edgecolor='none',
+            linewidth=0,
+        )
+
+    # Scatter the support contacts. Use a scatter (sized by tip diameter) — it's
+    # legible, fast, and doesn't choke on dense contacts.
+    if contact_metadata:
+        xs = [c['xyz'][0] for c in contact_metadata]
+        ys = [c['xyz'][1] for c in contact_metadata]
+        zs = [c['xyz'][2] for c in contact_metadata]
+        colors = [FACE_CLASS_COLOR.get(c.get('face_class', 'unknown'),
+                                       FACE_CLASS_COLOR['unknown'])
+                  for c in contact_metadata]
+        # tip diameter mm -> visual point size; clamp so micro tips are still visible
+        sizes = [max(15, 200 * c.get('tip_radius', 0.15)) for c in contact_metadata]
+
+        for ax in (ax_front, ax_side, ax_iso):
+            ax.scatter(xs, ys, zs, c=colors, s=sizes,
+                       edgecolor='black', linewidth=0.4, depthshade=False)
+
+    ax_front.view_init(elev=front_elev, azim=front_azim)
+    ax_side.view_init(elev=side_elev, azim=side_azim)
+    ax_iso.view_init(elev=25, azim=front_azim + 45)
+
+    for ax in (ax_front, ax_side, ax_iso):
+        setup_axis(ax, model_mesh)
+
+    # Build the legend on the iso axis
+    legend_handles = [
+        plt.Line2D([0], [0], marker='o', linestyle='', color=FACE_CLASS_COLOR['front'],
+                   label='front (scar — avoid)'),
+        plt.Line2D([0], [0], marker='o', linestyle='', color=FACE_CLASS_COLOR['side'],
+                   label='side'),
+        plt.Line2D([0], [0], marker='o', linestyle='', color=FACE_CLASS_COLOR['back'],
+                   label='back'),
+    ]
+    ax_iso.legend(handles=legend_handles, loc='upper right', fontsize=7)
+
+    plt.tight_layout()
+    plt.savefig(output_image, dpi=130, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
 
 if __name__ == '__main__':
     print("Rendering STL previews...")
