@@ -5,15 +5,50 @@
 The simplest way to use the tool:
 
 ```bash
-python support_generator.py your_model.stl
+python support_generator_cli.py your_model.stl
 ```
 
 This will:
 1. Load your STL file
-2. Auto-orient it for optimal printing
-3. Detect islands, overhangs, and bridges
-4. Generate minimal support structures
-5. Output `your_model_supported.stl`
+2. Auto-detect the mech's "front" face (the side that must stay scar-free)
+3. Auto-orient it for optimal printing (canonical mech poses only)
+4. Detect islands, overhangs, and bridges
+5. Generate minimal support structures, avoiding the front face
+6. Output:
+   - `your_model_supported.stl` — fused (model + supports) for one-click printing
+   - `your_model_supports_only.stl` — supports as a separate object for hand-editing in Chitubox/Lychee
+   - `your_model_supports_meta.json` — per-contact metadata (tier, face class, tip radius)
+   - `your_model_preview.png` — visual preview showing where supports land (green=front, yellow=side, blue=back)
+
+## BattleTech-specific Flags
+
+```bash
+# Tell the tool which direction the mech's visible front points.
+# Default is "auto" — uses a heuristic on the mid-Z face areas. Pass the
+# explicit axis when auto-detect is ambiguous (warning printed when this happens).
+# NOTE: argparse needs the "=" form for negative axes: --front=-Y
+python support_generator_cli.py model.stl --front +Y
+python support_generator_cli.py model.stl --front=-Y
+
+# Strict-front: skip front-face overhangs that the resin can self-bridge
+# (span < 3mm by default) instead of snapping them off to the nearest
+# non-front edge. Use this when ANY support scar on the front is unacceptable.
+python support_generator_cli.py model.stl --front +Y --strict-front
+
+# Override the micro-tier tip diameter (default 0.15mm). Used for sub-0.5mm
+# features (antennae, weapon-barrel tips). Smaller = harder to clean off,
+# but leaves no visible scar.
+python support_generator_cli.py model.stl --micro-tip 0.12
+
+# Only emit the supports-only STL (skip the fused output). Useful when you
+# want to hand-edit supports in Chitubox/Lychee before slicing. The tool will
+# also emit `<stem>_oriented_model.stl` so you can drop both into the slicer
+# with correct alignment.
+python support_generator_cli.py model.stl --supports-only
+
+# Skip the preview PNG (faster on large models)
+python support_generator_cli.py model.stl --no-preview
+```
 
 ## Basic Usage
 
